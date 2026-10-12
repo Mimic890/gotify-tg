@@ -79,7 +79,7 @@ Every push to `main` that passes the tests publishes a multi-arch image
 [`ghcr.io/mimic890/gotify-tg`](https://github.com/Mimic890/gotify-tg/pkgs/container/gotify-tg).
 You do not need to clone the repository to run it.
 
-Create a directory for the deployment (secrets and state live next to the
+Create a directory for the deployment (`.env` and state live next to the
 compose file):
 
 ```fish
@@ -97,17 +97,14 @@ services:
     restart: unless-stopped
     environment:
       GOTIFY_URL: ${GOTIFY_URL:?set GOTIFY_URL in .env}
+      GOTIFY_CLIENT_TOKEN: ${GOTIFY_CLIENT_TOKEN:?set GOTIFY_CLIENT_TOKEN in .env}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN in .env}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:?set TELEGRAM_CHAT_ID in .env}
       MIN_PRIORITY: ${MIN_PRIORITY:-0}
       APP_IDS: ${APP_IDS:-}
       ALLOW_INSECURE_GOTIFY: ${ALLOW_INSECURE_GOTIFY:-false}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      GOTIFY_CLIENT_TOKEN_FILE: /run/secrets/gotify_client_token
-      TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
       DATA_DIR: /data
-    secrets:
-      - gotify_client_token
-      - telegram_bot_token
     volumes:
       - ./data:/data
     user: "65532:65532"
@@ -130,19 +127,19 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-secrets:
-  gotify_client_token:
-    file: ./secrets/gotify_client_token
-  telegram_bot_token:
-    file: ./secrets/telegram_bot_token
 ```
 
-Save this as `.env` and fill in your values (secrets do **not** go here):
+Save this as `.env` and fill in your values:
 
 ```dotenv
 # Base URL of your Gotify server (https:// or wss://; a sub-path like /gotify is fine).
 GOTIFY_URL=https://gotify.example.com
+
+# Gotify client token (Gotify web UI -> Clients -> Create Client).
+GOTIFY_CLIENT_TOKEN=
+
+# Telegram bot token from @BotFather.
+TELEGRAM_BOT_TOKEN=
 
 # Numeric Telegram chat ID of your DM with the bot.
 TELEGRAM_CHAT_ID=123456789
@@ -160,21 +157,13 @@ ALLOW_INSECURE_GOTIFY=false
 LOG_LEVEL=info
 ```
 
-Create the secrets and the data directory, then start:
+Protect `.env`, create the data directory and start:
 
 ```fish
 chmod 600 .env
-mkdir -p secrets data
-chmod 700 secrets
-umask 077
-read -s -P 'Gotify client token: ' tok; and printf '%s\n' $tok > secrets/gotify_client_token
-read -s -P 'Telegram bot token: ' tok; and printf '%s\n' $tok > secrets/telegram_bot_token
-set -e tok
-umask 022
-
-# The container runs as UID/GID 65532 and must read the secrets and write data/.
-sudo chown 65532:65532 secrets/gotify_client_token secrets/telegram_bot_token data
-sudo chmod 0400 secrets/gotify_client_token secrets/telegram_bot_token
+mkdir -p data
+# The container runs as UID/GID 65532 and must be able to write data/.
+sudo chown 65532:65532 data
 sudo chmod 0700 data
 
 docker compose pull
@@ -210,15 +199,14 @@ encrypted mesh such as WireGuard/Tailscale).
 
 ## Configuration
 
-Non-secret settings live in `.env` (read by Compose), secrets in `./secrets/`.
-`GOTIFY_CLIENT_TOKEN_FILE`, `TELEGRAM_BOT_TOKEN_FILE` and `DATA_DIR` are
-already set in the compose file.
+All settings, including the tokens, live in `.env` (read by Compose).
+`DATA_DIR` is already set in the compose file.
 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `GOTIFY_URL` | required | Base URL of Gotify, `https://` or `wss://`. A sub-path (`https://example.com/gotify`) is supported. Must not contain credentials or a query. |
-| `GOTIFY_CLIENT_TOKEN_FILE` | set by Compose | File containing the Gotify client token (`/run/secrets/gotify_client_token`). |
-| `TELEGRAM_BOT_TOKEN_FILE` | set by Compose | File containing the Telegram bot token (`/run/secrets/telegram_bot_token`). |
+| `GOTIFY_CLIENT_TOKEN` | required | Gotify client token. |
+| `TELEGRAM_BOT_TOKEN` | required | Telegram bot token from @BotFather. |
 | `TELEGRAM_CHAT_ID` | required | Numeric chat ID to send to (non-zero integer). |
 | `MIN_PRIORITY` | `0` | Forward only messages with priority >= this (0 to 1000). Missing priority counts as 0. |
 | `APP_IDS` | empty = all | Comma-separated Gotify application IDs to forward, e.g. `1,4`. |
@@ -226,19 +214,18 @@ already set in the compose file.
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn` or `error`. |
 | `DATA_DIR` | `/data` | Directory for `state.json` and the health timestamp. |
 
-`GOTIFY_CLIENT_TOKEN` and `TELEGRAM_BOT_TOKEN` can also be set directly as
-environment variables. This is discouraged: plain environment variables show
-up in `docker inspect`, in the process environment and easily end up in
-shell history or backups. Setting both the variable and its `*_FILE` variant
-is an error.
+Alternatively, each token can be read from a file via `GOTIFY_CLIENT_TOKEN_FILE`
+/ `TELEGRAM_BOT_TOKEN_FILE` (e.g. with Docker secrets). Setting both a token
+and its `*_FILE` variant is an error.
 
 The configuration is validated at startup; on any problem the process prints
 all errors and exits with code 2.
 
 ## Security notes
 
-- **Tokens.** Secrets are mounted as files via Compose `secrets:` from
-  `./secrets/` (git-ignored). The Gotify token is sent only in the
+- **Tokens.** Tokens live in `.env` (git-ignored, keep it `chmod 600`). Note
+  that environment variables are visible to anyone who can run
+  `docker inspect` on the host. The Gotify token is sent only in the
   `X-Gotify-Key` header, never in a URL. Tokens are never logged; transport
   errors are stripped of URLs (the Telegram API URL contains the bot token).
 - **Transport.** `https://`/`wss://` is required for Gotify unless
@@ -292,7 +279,7 @@ git clone https://github.com/Mimic890/gotify-tg.git
 cd gotify-tg
 cp .env.example .env
 $EDITOR .env
-# create secrets/ and data/ as in step 3
+# create data/ as in step 3
 docker compose up -d --build
 ```
 
